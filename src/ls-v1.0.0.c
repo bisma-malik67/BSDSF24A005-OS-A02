@@ -26,37 +26,48 @@ typedef struct
     int size;
 } widths_t;
 
-void do_ls(const char *dir, int long_flag);
+/* which output format was requested */
+typedef enum
+{
+    MODE_DEFAULT,
+    MODE_LONG,
+    MODE_HORIZONTAL
+} display_mode_t;
+
+void do_ls(const char *dir, display_mode_t mode);
 void print_long(const char *dir, const char *name, const widths_t *w);
 
 int main(int argc, char *argv[])
 {
     int opt;
-    int long_flag = 0;
+    display_mode_t mode = MODE_DEFAULT;
 
-    while ((opt = getopt(argc, argv, "l")) != -1)
+    while ((opt = getopt(argc, argv, "lx")) != -1)
     {
         switch (opt)
         {
         case 'l':
-            long_flag = 1;
+            mode = MODE_LONG;
+            break;
+        case 'x':
+            mode = MODE_HORIZONTAL;
             break;
         default:
-            fprintf(stderr, "Usage: %s [-l] [dir...]\n", argv[0]);
+            fprintf(stderr, "Usage: %s [-l | -x] [dir...]\n", argv[0]);
             exit(EXIT_FAILURE);
         }
     }
 
     if (optind == argc)
     {
-        do_ls(".", long_flag);
+        do_ls(".", mode);
     }
     else
     {
         for (int i = optind; i < argc; i++)
         {
             printf("Directory listing of %s : \n", argv[i]);
-            do_ls(argv[i], long_flag);
+            do_ls(argv[i], mode);
             puts("");
         }
     }
@@ -215,6 +226,43 @@ static void display_columns(char **names, int count, int maxlen)
     }
 }
 
+/* ---------- horizontal display: left to right (-x) ---------- */
+
+static void display_horizontal(char **names, int count, int maxlen)
+{
+    int width = terminal_width();
+    int col_width = maxlen + 2;
+    int pos = 0;      /* current horizontal position on the line */
+    int prev_len = 0; /* length of the previous name */
+
+    for (int i = 0; i < count; i++)
+    {
+        int len = strlen(names[i]);
+
+        if (i > 0)
+        {
+            int pad = col_width - prev_len;
+            if (pos + pad + maxlen > width) /* next column slot does not fit: new line */
+            {
+                putchar('\n');
+                pos = 0;
+            }
+            else
+            {
+                for (int k = 0; k < pad; k++)
+                    putchar(' ');
+                pos += pad;
+            }
+        }
+
+        printf("%s", names[i]);
+        pos += len;
+        prev_len = len;
+    }
+    if (count > 0)
+        putchar('\n');
+}
+
 /* ---------- long listing ---------- */
 
 static void compute_widths(const char *dir, char **names, int count,
@@ -259,7 +307,7 @@ static void display_long(const char *dir, char **names, int count)
         print_long(dir, names[i], &w);
 }
 
-void do_ls(const char *dir, int long_flag)
+void do_ls(const char *dir, display_mode_t mode)
 {
     char **names;
     int count, maxlen;
@@ -267,8 +315,10 @@ void do_ls(const char *dir, int long_flag)
     if (read_names(dir, &names, &count, &maxlen) == -1)
         return;
 
-    if (long_flag)
+    if (mode == MODE_LONG)
         display_long(dir, names, count);
+    else if (mode == MODE_HORIZONTAL)
+        display_horizontal(names, count, maxlen);
     else
         display_columns(names, count, maxlen);
 

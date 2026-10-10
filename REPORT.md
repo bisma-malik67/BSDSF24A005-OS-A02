@@ -76,3 +76,33 @@ With only a fixed width of 80:
 
 The fallback is still useful when ioctl fails, for example when the output is
 redirected to a file or a pipe.
+
+## Feature-4: Horizontal Column Display -x (v1.3.0)
+
+### Q1. Compare the complexity of the "down then across" and "across" printing logic. Which needs more pre-calculation and why?
+
+The "down then across" (vertical) layout needs more pre-calculation. Before
+printing anything the program must know the number of columns
+(terminal width / column width) and the number of rows
+(ceil(total files / columns)), because the item at row `r` and column `c` is
+`names[c * rows + r]`. The rows must be known up front, since the first line
+already needs items that are `rows` positions apart in the array.
+
+The horizontal layout (-x) is simpler. The array is walked once in order, and
+the program only keeps track of the current horizontal position. Each name is
+printed and padded to the column width, and when the next column slot would not
+fit in the terminal width, a newline is printed and the position is reset. No
+row count is needed, and no index arithmetic is required.
+
+### Q2. How did you manage the display modes (-l, -x, default)? How does the program decide which function to call?
+
+I used an enum `display_mode_t` with the values `MODE_DEFAULT`, `MODE_LONG` and
+`MODE_HORIZONTAL`. In `main()` the `getopt()` loop (option string "lx") sets a
+single variable `mode` when it sees -l or -x. If both are given, the last one
+wins, like in the real ls. The default value is `MODE_DEFAULT`.
+
+`mode` is passed to `do_ls()`, which first reads all names into a dynamic
+array. After that it checks the mode: `MODE_LONG` calls `display_long()`,
+`MODE_HORIZONTAL` calls `display_horizontal()`, and otherwise
+`display_columns()` (down then across) is called. Reading the directory is
+shared by all modes, and only the printing function differs.
