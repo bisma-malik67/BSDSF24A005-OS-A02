@@ -1,6 +1,6 @@
 /*
-* Programming Assignment 02: ls v1.1.0
-* Feature: -l (long listing) with aligned columns
+* Programming Assignment 02: ls v1.2.0
+* Features: -l (long listing), default "down then across" columns
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +9,7 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
 #include <pwd.h>
 #include <grp.h>
 #include <time.h>
@@ -16,7 +17,7 @@
 
 extern int errno;
 
-/* maximum column widths, found in the first pass */
+/* maximum column widths for the long listing */
 typedef struct
 {
     int nlink;
@@ -62,6 +63,8 @@ int main(int argc, char *argv[])
     return 0;
 }
 
+/* ---------- helpers ---------- */
+
 static int num_digits(unsigned long long n)
 {
     int d = 1;
@@ -73,7 +76,6 @@ static int num_digits(unsigned long long n)
     return d;
 }
 
-/* user name, or the number if there is no such user */
 static const char *user_name(uid_t uid, char *buf, size_t n)
 {
     struct passwd *pw = getpwuid(uid);
@@ -92,25 +94,140 @@ static const char *group_name(gid_t gid, char *buf, size_t n)
     return buf;
 }
 
-/* First pass: find the widest value of each column and the block total */
-static void compute_widths(const char *dir, widths_t *w, long long *total)
+static void free_names(char **names, int count)
 {
-    struct dirent *entry;
+    for (int i = 0; i < count; i++)
+        free(names[i]);
+    free(names);
+}
+
+/* ---------- reading the directory into a dynamic array ---------- */
+
+/* Reads all non-hidden names. On success returns 0 and gives back the array,
+   the number of names and the length of the longest name. */
+static int read_names(const char *dir, char ***out, int *count, int *maxlen)
+{
     DIR *dp = opendir(dir);
     if (dp == NULL)
-        return;
+    {
+        fprintf(stderr, "Cannot open directory : %s\n", dir);
+        return -1;
+    }
 
-    memset(w, 0, sizeof(*w));
-    *total = 0;
+    int cap = 16, n = 0, longest = 0;
+    char **names = malloc(cap * sizeof(char *));
+    if (names == NULL)
+    {
+        perror("malloc");
+        closedir(dp);
+        return -1;
+    }
 
+    struct dirent *entry;
+    errno = 0;
     while ((entry = readdir(dp)) != NULL)
     {
         if (entry->d_name[0] == '.')
             continue;
 
+        if (n == cap) /* array is full: double its size */
+        {
+            cap *= 2;
+            char **tmp = realloc(names, cap * sizeof(char *));
+            if (tmp == NULL)
+            {
+                perror("realloc");
+                free_names(names, n);
+                closedir(dp);
+                return -1;
+            }
+            names = tmp;
+        }
+
+        names[n] = strdup(entry->d_name);
+        if (names[n] == NULL)
+        {
+            perror("strdup");
+            free_names(names, n);
+            closedir(dp);
+            return -1;
+        }
+
+        int len = strlen(names[n]);
+        if (len > longest)
+            longest = len;
+        n++;
+    }
+
+    if (errno != 0)
+        perror("readdir failed");
+
+    closedir(dp);
+    *out = names;
+    *count = n;
+    *maxlen = longest;
+    return 0;
+}
+
+/* ---------- column display: down then across ---------- */
+
+static int terminal_width(void)
+{
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0)
+        return 80; /* fallback */
+    return ws.ws_col;
+}
+
+static void display_columns(char **names, int count, int maxlen)
+{
+    if (count == 0)
+        return;
+
+    int width = terminal_width();
+    int col_width = maxlen + 2; /* 2 spaces between columns */
+
+    int cols = width / col_width;
+    if (cols < 1)
+        cols = 1;
+    int rows = (count + cols - 1) / cols; /* ceiling division */
+
+    for (int r = 0; r < rows; r++)
+    {
+        for (int c = 0; c < cols; c++)
+        {
+            int idx = c * rows + r; /* down the column first */
+            if (idx >= count)
+                break;
+
+            printf("%s", names[idx]);
+
+            /* pad only if another item follows on this row */
+            int next = (c + 1) * rows + r;
+            if (c + 1 < cols && next < count)
+            {
+                int pad = col_width - (int)strlen(names[idx]);
+                for (int k = 0; k < pad; k++)
+                    putchar(' ');
+            }
+        }
+        putchar('\n');
+    }
+}
+
+/* ---------- long listing ---------- */
+
+static void compute_widths(const char *dir, char **names, int count,
+                           widths_t *w, long long *total)
+{
+    memset(w, 0, sizeof(*w));
+    *total = 0;
+
+    for (int i = 0; i < count; i++)
+    {
         char path[PATH_MAX];
         struct stat st;
-        snprintf(path, sizeof(path), "%s/%s", dir, entry->d_name);
+        snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
         if (lstat(path, &st) == -1)
             continue;
 
@@ -126,53 +243,41 @@ static void compute_widths(const char *dir, widths_t *w, long long *total)
         l = num_digits(st.st_size);
         if (l > w->size) w->size = l;
 
-        *total += st.st_blocks; /* counted in 512-byte units */
+        *total += st.st_blocks; /* 512-byte units */
     }
-    closedir(dp);
+}
+
+static void display_long(const char *dir, char **names, int count)
+{
+    widths_t w;
+    long long total;
+
+    compute_widths(dir, names, count, &w, &total);
+    printf("total %lld\n", total / 2); /* ls shows 1024-byte blocks */
+
+    for (int i = 0; i < count; i++)
+        print_long(dir, names[i], &w);
 }
 
 void do_ls(const char *dir, int long_flag)
 {
-    struct dirent *entry;
-    widths_t w;
-    long long total = 0;
+    char **names;
+    int count, maxlen;
 
-    DIR *dp = opendir(dir);
-    if (dp == NULL)
-    {
-        fprintf(stderr, "Cannot open directory : %s\n", dir);
+    if (read_names(dir, &names, &count, &maxlen) == -1)
         return;
-    }
 
     if (long_flag)
-    {
-        compute_widths(dir, &w, &total);
-        printf("total %lld\n", total / 2); /* ls shows 1024-byte blocks */
-    }
+        display_long(dir, names, count);
+    else
+        display_columns(names, count, maxlen);
 
-    errno = 0;
-    while ((entry = readdir(dp)) != NULL)
-    {
-        if (entry->d_name[0] == '.')
-            continue;
-        if (long_flag)
-            print_long(dir, entry->d_name, &w);
-        else
-            printf("%s\n", entry->d_name);
-    }
-
-    if (errno != 0)
-    {
-        perror("readdir failed");
-    }
-
-    closedir(dp);
+    free_names(names, count);
 }
 
 /* Convert st_mode into a string like "drwxr-xr-x" */
 void mode_to_string(mode_t m, char *s)
 {
-    /* file type */
     if (S_ISREG(m))       s[0] = '-';
     else if (S_ISDIR(m))  s[0] = 'd';
     else if (S_ISLNK(m))  s[0] = 'l';
@@ -182,20 +287,16 @@ void mode_to_string(mode_t m, char *s)
     else if (S_ISSOCK(m)) s[0] = 's';
     else                  s[0] = '?';
 
-    /* owner */
     s[1] = (m & S_IRUSR) ? 'r' : '-';
     s[2] = (m & S_IWUSR) ? 'w' : '-';
     s[3] = (m & S_IXUSR) ? 'x' : '-';
-    /* group */
     s[4] = (m & S_IRGRP) ? 'r' : '-';
     s[5] = (m & S_IWGRP) ? 'w' : '-';
     s[6] = (m & S_IXGRP) ? 'x' : '-';
-    /* others */
     s[7] = (m & S_IROTH) ? 'r' : '-';
     s[8] = (m & S_IWOTH) ? 'w' : '-';
     s[9] = (m & S_IXOTH) ? 'x' : '-';
 
-    /* special bits: setuid, setgid, sticky */
     if (m & S_ISUID) s[3] = (m & S_IXUSR) ? 's' : 'S';
     if (m & S_ISGID) s[6] = (m & S_IXGRP) ? 's' : 'S';
     if (m & S_ISVTX) s[9] = (m & S_IXOTH) ? 't' : 'T';
@@ -222,8 +323,7 @@ void print_long(const char *dir, const char *name, const widths_t *w)
     const char *uname = user_name(st.st_uid, ub, sizeof(ub));
     const char *gname = group_name(st.st_gid, gb, sizeof(gb));
 
-    /* ctime gives "Sun Oct 11 00:11:00 2026\n"
-       ls shows the time for recent files, and the year for old ones */
+    /* ls shows the time for recent files, and the year for old ones */
     char *t = ctime(&st.st_mtime);
     char timebuf[32];
     time_t now = time(NULL);
@@ -241,7 +341,6 @@ void print_long(const char *dir, const char *name, const widths_t *w)
            w->size, (long long)st.st_size,
            timebuf, name);
 
-    /* for symbolic links show where they point */
     if (S_ISLNK(st.st_mode))
     {
         char target[PATH_MAX];
