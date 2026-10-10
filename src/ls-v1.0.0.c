@@ -307,6 +307,17 @@ static void display_long(const char *dir, char **names, int count)
         print_long(dir, names[i], &w);
 }
 
+/* ---------- sorting ---------- */
+
+/* qsort passes pointers to the array elements. Each element is a char *,
+   so the arguments are really char ** hidden behind const void *. */
+static int compare_names(const void *a, const void *b)
+{
+    const char *s1 = *(const char **)a;
+    const char *s2 = *(const char **)b;
+    return strcmp(s1, s2);
+}
+
 void do_ls(const char *dir, display_mode_t mode)
 {
     char **names;
@@ -314,6 +325,8 @@ void do_ls(const char *dir, display_mode_t mode)
 
     if (read_names(dir, &names, &count, &maxlen) == -1)
         return;
+
+    qsort(names, count, sizeof(char *), compare_names);
 
     if (mode == MODE_LONG)
         display_long(dir, names, count);

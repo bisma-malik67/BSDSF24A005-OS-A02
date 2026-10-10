@@ -106,3 +106,43 @@ array. After that it checks the mode: `MODE_LONG` calls `display_long()`,
 `MODE_HORIZONTAL` calls `display_horizontal()`, and otherwise
 `display_columns()` (down then across) is called. Reading the directory is
 shared by all modes, and only the printing function differs.
+
+## Feature-5: Alphabetical Sort (v1.4.0)
+
+### Q1. Why must all directory entries be read into memory before sorting? What are the drawbacks for directories with millions of files?
+
+`readdir()` returns entries one at a time in the order the file system stores
+them, which is not alphabetical. The smallest name could be the very last entry
+returned, so the program cannot print anything until it has seen all the
+names. A sort needs every element available at once to compare and rearrange
+them, so all names are first stored in a dynamic array and then sorted with
+`qsort()`.
+
+For a directory with millions of files this has drawbacks:
+- Memory use grows with the number of entries (the pointer array plus a copy of
+  every name made with `strdup`), which can be hundreds of megabytes.
+- Nothing is printed until the whole directory has been read and sorted, so the
+  user waits a long time and sees no output.
+- Sorting costs O(n log n) time on top of the read time.
+- With `-l`, every file is also `lstat()`ed, which adds a lot of I/O.
+  The real ls has an unsorted option (-f) for this reason, which prints entries
+  as they are read without storing them.
+
+### Q2. What is the purpose and signature of the comparison function for qsort()? Why const void *?
+
+`qsort()` is a generic function: it can sort an array of any element type, but
+it does not know how to compare two elements. The caller supplies a comparison
+function with the signature
+
+    int compare(const void *a, const void *b);
+
+It must return a negative number if the first element should come before the
+second, zero if they are equal, and a positive number if the first should come
+after the second.
+
+The arguments are `const void *` because `qsort()` has to work with any type,
+and `void *` is the only pointer type that can point to anything. `const`
+promises that the comparison does not modify the elements. `qsort()` passes the
+address of each array element. In my program each element is a `char *`, so the
+arguments are really `char **`. The function first casts them
+(`*(const char **)a`) to get the string and then returns `strcmp(s1, s2)`.
