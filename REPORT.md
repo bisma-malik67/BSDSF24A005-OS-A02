@@ -146,3 +146,37 @@ promises that the comparison does not modify the elements. `qsort()` passes the
 address of each array element. In my program each element is a `char *`, so the
 arguments are really `char **`. The function first casts them
 (`*(const char **)a`) to get the string and then returns `strcmp(s1, s2)`.
+
+## Feature-6: Colorized Output (v1.5.0)
+
+### Q1. How do ANSI escape codes produce color in a Linux terminal? Show the sequence for green text.
+
+ANSI escape codes are sequences of ordinary characters that the terminal
+emulator interprets as commands instead of printing them. A sequence starts
+with the escape character (ASCII 27, written `\033` in C), followed by `[`,
+then one or more numbers separated by `;`, and ends with the letter `m`
+(select graphic rendition). For example `0;32` selects the normal style with
+green foreground. Everything printed after the sequence uses that color until
+it is changed, so the color must be reset with `\033[0m` afterwards.
+
+Printing green text in C:
+
+    printf("\033[0;32m%s\033[0m", "hello");
+
+Here `\033[0;32m` switches to green, `hello` is printed in green, and
+`\033[0m` resets the terminal to the default. The other codes I used are
+`0;34` blue, `0;31` red, `0;35` pink/magenta and `7` for reverse video.
+
+### Q2. Which bits of st_mode determine whether a file is executable by owner, group or others?
+
+The execute permission has one bit for each class of user:
+
+- `S_IXUSR` (0100): execute permission for the owner
+- `S_IXGRP` (0010): execute permission for the group
+- `S_IXOTH` (0001): execute permission for others
+
+A bitwise AND tests them, for example `st_mode & S_IXUSR` is non-zero if the
+owner can execute the file. My program tests
+`st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)`, so a file is colored green if any of
+the three execute bits is set. Directories also have these bits set, which is
+why the directory check (`S_ISDIR`) is done before the executable check.

@@ -180,6 +180,71 @@ static int read_names(const char *dir, char ***out, int *count, int *maxlen)
     return 0;
 }
 
+/* ---------- colors (ANSI escape codes) ---------- */
+
+#define COLOR_RESET   "\033[0m"
+#define COLOR_BLUE    "\033[0;34m"
+#define COLOR_GREEN   "\033[0;32m"
+#define COLOR_RED     "\033[0;31m"
+#define COLOR_PINK    "\033[0;35m"
+#define COLOR_REVERSE "\033[7m"
+
+static int ends_with(const char *name, const char *suffix)
+{
+    size_t n = strlen(name), m = strlen(suffix);
+    return n >= m && strcmp(name + n - m, suffix) == 0;
+}
+
+static int is_archive(const char *name)
+{
+    return ends_with(name, ".tar") || ends_with(name, ".gz") ||
+           ends_with(name, ".zip");
+}
+
+/* Returns the color for a file, or NULL for the default color */
+static const char *color_for(const char *name, mode_t m)
+{
+    if (S_ISLNK(m))
+        return COLOR_PINK;
+    if (S_ISDIR(m))
+        return COLOR_BLUE;
+    if (S_ISCHR(m) || S_ISBLK(m) || S_ISSOCK(m) || S_ISFIFO(m))
+        return COLOR_REVERSE;
+    if (is_archive(name))
+        return COLOR_RED;
+    if (m & (S_IXUSR | S_IXGRP | S_IXOTH))
+        return COLOR_GREEN;
+    return NULL;
+}
+
+/* Print a name in its color. Colors are used only when writing to a
+   terminal, so pipes and files do not get escape codes. */
+static void print_colored(const char *name, mode_t m)
+{
+    static int use_color = -1;
+    if (use_color == -1)
+        use_color = isatty(STDOUT_FILENO);
+
+    const char *color = use_color ? color_for(name, m) : NULL;
+    if (color)
+        printf("%s%s%s", color, name, COLOR_RESET);
+    else
+        printf("%s", name);
+}
+
+/* lstat the file first, then print its name in the right color */
+static void print_name(const char *dir, const char *name)
+{
+    char path[PATH_MAX];
+    struct stat st;
+
+    snprintf(path, sizeof(path), "%s/%s", dir, name);
+    if (lstat(path, &st) == -1)
+        printf("%s", name);
+    else
+        print_colored(name, st.st_mode);
+}
+
 /* ---------- column display: down then across ---------- */
 
 static int terminal_width(void)
@@ -190,7 +255,7 @@ static int terminal_width(void)
     return ws.ws_col;
 }
 
-static void display_columns(char **names, int count, int maxlen)
+static void display_columns(const char *dir, char **names, int count, int maxlen)
 {
     if (count == 0)
         return;
@@ -211,7 +276,7 @@ static void display_columns(char **names, int count, int maxlen)
             if (idx >= count)
                 break;
 
-            printf("%s", names[idx]);
+            print_name(dir, names[idx]);
 
             /* pad only if another item follows on this row */
             int next = (c + 1) * rows + r;
@@ -228,7 +293,7 @@ static void display_columns(char **names, int count, int maxlen)
 
 /* ---------- horizontal display: left to right (-x) ---------- */
 
-static void display_horizontal(char **names, int count, int maxlen)
+static void display_horizontal(const char *dir, char **names, int count, int maxlen)
 {
     int width = terminal_width();
     int col_width = maxlen + 2;
@@ -255,7 +320,7 @@ static void display_horizontal(char **names, int count, int maxlen)
             }
         }
 
-        printf("%s", names[i]);
+        print_name(dir, names[i]);
         pos += len;
         prev_len = len;
     }
@@ -331,9 +396,9 @@ void do_ls(const char *dir, display_mode_t mode)
     if (mode == MODE_LONG)
         display_long(dir, names, count);
     else if (mode == MODE_HORIZONTAL)
-        display_horizontal(names, count, maxlen);
+        display_horizontal(dir, names, count, maxlen);
     else
-        display_columns(names, count, maxlen);
+        display_columns(dir, names, count, maxlen);
 
     free_names(names, count);
 }
@@ -396,13 +461,14 @@ void print_long(const char *dir, const char *name, const widths_t *w)
     else
         snprintf(timebuf, sizeof(timebuf), "%.12s", t + 4);
 
-    printf("%s %*lu %-*s %-*s %*lld %s %s",
+    printf("%s %*lu %-*s %-*s %*lld %s ",
            mode,
            w->nlink, (unsigned long)st.st_nlink,
            w->user, uname,
            w->group, gname,
            w->size, (long long)st.st_size,
-           timebuf, name);
+           timebuf);
+    print_colored(name, st.st_mode);
 
     if (S_ISLNK(st.st_mode))
     {
