@@ -180,3 +180,38 @@ owner can execute the file. My program tests
 `st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)`, so a file is colored green if any of
 the three execute bits is set. Directories also have these bits set, which is
 why the directory check (`S_ISDIR`) is done before the executable check.
+
+## Feature-7: Recursive Listing -R (v1.6.0)
+
+### Q1. What is a "base case" in a recursive function? What is the base case in your recursive ls?
+
+The base case is the condition under which a recursive function stops calling
+itself and returns directly. Without it the function would call itself forever
+and the stack would overflow.
+
+In my `do_ls()` there is no explicit `if` for the base case. It is reached
+when a directory contains no subdirectories: the loop that looks for
+directories finds nothing to recurse into, so no further call is made and the
+function returns to its caller. In other words, recursion ends when the
+directory tree runs out of subdirectories. Two checks make sure this really
+happens: the entries `.` and `..` are skipped, because they would make a
+directory call itself or its parent endlessly, and `lstat()` is used instead of
+`stat()`, so a symbolic link that points to a parent directory is treated as a
+link and not as a directory to enter. A directory that cannot be opened prints
+an error and returns immediately, which is another way a call ends.
+
+### Q2. Why must a full path be built before the recursive call? What if do_ls("subdir") were called from inside do_ls("parent_dir")?
+
+`readdir()` returns only the entry name (for example `subdir`), not its path.
+All file system calls such as `opendir()` and `lstat()` resolve a relative path
+against the current working directory of the process, which does not change
+while the program runs.
+
+If `do_ls("subdir")` were called from inside `do_ls("parent_dir")`, the program
+would look for `subdir` in the directory where it was started and not inside
+`parent_dir`. In that case `lstat("subdir")` would fail or, worse, find an
+unrelated directory with the same name, and `opendir("subdir")` would print
+"Cannot open directory" or list the wrong directory. Building the full path
+`parent_dir/subdir` (and passing it down, so deeper levels become
+`parent_dir/subdir/inner` and so on) makes every call refer to exactly the
+right directory, no matter where the program was started.

@@ -34,15 +34,16 @@ typedef enum
     MODE_HORIZONTAL
 } display_mode_t;
 
-void do_ls(const char *dir, display_mode_t mode);
+void do_ls(const char *dir, display_mode_t mode, int recursive);
 void print_long(const char *dir, const char *name, const widths_t *w);
 
 int main(int argc, char *argv[])
 {
     int opt;
     display_mode_t mode = MODE_DEFAULT;
+    int recursive = 0;
 
-    while ((opt = getopt(argc, argv, "lx")) != -1)
+    while ((opt = getopt(argc, argv, "lxR")) != -1)
     {
         switch (opt)
         {
@@ -52,22 +53,26 @@ int main(int argc, char *argv[])
         case 'x':
             mode = MODE_HORIZONTAL;
             break;
+        case 'R':
+            recursive = 1;
+            break;
         default:
-            fprintf(stderr, "Usage: %s [-l | -x] [dir...]\n", argv[0]);
+            fprintf(stderr, "Usage: %s [-l | -x] [-R] [dir...]\n", argv[0]);
             exit(EXIT_FAILURE);
         }
     }
 
     if (optind == argc)
     {
-        do_ls(".", mode);
+        do_ls(".", mode, recursive);
     }
     else
     {
         for (int i = optind; i < argc; i++)
         {
-            printf("Directory listing of %s : \n", argv[i]);
-            do_ls(argv[i], mode);
+            if (!recursive) /* with -R, do_ls prints the "dir:" header itself */
+                printf("Directory listing of %s : \n", argv[i]);
+            do_ls(argv[i], mode, recursive);
             puts("");
         }
     }
@@ -383,10 +388,13 @@ static int compare_names(const void *a, const void *b)
     return strcmp(s1, s2);
 }
 
-void do_ls(const char *dir, display_mode_t mode)
+void do_ls(const char *dir, display_mode_t mode, int recursive)
 {
     char **names;
     int count, maxlen;
+
+    if (recursive)
+        printf("%s:\n", dir);
 
     if (read_names(dir, &names, &count, &maxlen) == -1)
         return;
@@ -399,6 +407,31 @@ void do_ls(const char *dir, display_mode_t mode)
         display_horizontal(dir, names, count, maxlen);
     else
         display_columns(dir, names, count, maxlen);
+
+    if (recursive)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            if (strcmp(names[i], ".") == 0 || strcmp(names[i], "..") == 0)
+                continue;
+
+            /* build the full path: dir/name */
+            char path[PATH_MAX];
+            size_t dl = strlen(dir);
+            snprintf(path, sizeof(path), "%s%s%s", dir,
+                     (dl > 0 && dir[dl - 1] == '/') ? "" : "/", names[i]);
+
+            struct stat st;
+            if (lstat(path, &st) == -1) /* lstat: do not follow symlinks */
+                continue;
+
+            if (S_ISDIR(st.st_mode))
+            {
+                printf("\n");
+                do_ls(path, mode, recursive); /* recursive call */
+            }
+        }
+    }
 
     free_names(names, count);
 }
